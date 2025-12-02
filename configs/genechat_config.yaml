@@ -1,0 +1,298 @@
+# GeneChat2 Configuration
+# 基于论文"GeneChat: Multi-Modal Large Language Model Enables Gene Function Prediction"
+
+# 基础配置
+project_name: "genechat2"
+version: "2.0"
+description: "重新实现的基因功能预测多模态大语言模型"
+
+# 模型配置
+model:
+  name: "genechat2"
+  arch: "dnabert2_adapter_vicuna"
+
+  # 基因编码器配置
+  gene_encoder:
+    name: "DNABERT2"
+    model_path: "zhihan1996/DNABERT-2-117M"
+    frozen: true
+    max_sequence_length: 160000  # 160kb DNA序列
+    window_size: 512  # 滑动窗口大小（论文规格）
+    window_overlap: 10  # 10bp重叠（论文要求）
+    embedding_dim: 768  # DNABERT2原始输出维度
+    pooled_dim: 256  # Pooling后的维度（论文要求）
+
+  # 适配器配置（论文核心创新：256→5120）
+  adapter:
+    type: "linear_projection"
+    input_dim: 256  # DNABERT2 pooling后输出（论文规格）
+    output_dim: 5120  # Vicuna-13B输入维度
+    frozen: false  # 训练适配器
+
+  # 语言模型配置
+  language_model:
+    name: "Vicuna-13B-v1.5"
+    model_path: "lmsys/vicuna-13b-v1.5"
+    max_new_tokens: 256  # 最大生成长度
+    frozen: false  # 微调语言模型
+    use_lora: true  # 使用LoRA微调
+
+  # LoRA配置（论文规格）
+  lora:
+    r: 8
+    lora_alpha: 16
+    target_modules: ["q_proj", "v_proj"]  # 论文只用q和v
+    lora_dropout: 0.05
+    bias: "none"
+    task_type: "CAUSAL_LM"
+
+# 数据配置
+data:
+  # 数据源配置
+  source:
+    type: "ncbi_gene_database"
+    total_genes: 50248  # 论文中的准确基因数量
+    download_url: "https://ftp.ncbi.nlm.nih.gov/gene/DATA/"
+
+  # 基因序列配置
+  gene_sequence:
+    max_length: 160000  # 160kb
+    alphabet: ["A", "C", "G", "T", "N"]
+    padding: "left"
+    truncation: true
+
+  # 滑动窗口配置（论文方法）
+  sliding_window:
+    window_size: 512  # 512碱基对
+    overlap: 10  # 10bp重叠（论文要求）
+    stride: 502  # 512-10=502（计算得出）
+    max_windows: 319  # 160kb/502 ≈ 319个窗口
+
+  # 数据格式（论文中的三胞胎格式）
+  triplet_format:
+    - field: "dna_sequence"
+      type: "string"
+      description: "160kb DNA序列"
+    - field: "prompt"
+      type: "string"
+      description: "固定提示'please predict the function of this gene'"
+    - field: "target_description"
+      type: "string"
+      description: "基因功能描述（生物体、位置、功能）"
+
+  # 数据集分割
+  splits:
+    train: 0.9
+    validation: 0.05
+    test: 0.05
+    random_seed: 42
+
+# 训练配置
+training:
+  # 基础训练参数（论文规格）
+  max_epochs: 10
+  max_training_steps: 170000  # 论文训练170k步
+  batch_size: 1  # 受GPU内存限制
+  gradient_accumulation_steps: 8  # 论文使用8步累积（有效批大小=8）
+
+  # 优化器配置（论文规格）
+  optimizer:
+    name: "adamw"
+    learning_rate: 1.0e-4
+    weight_decay: 0.05  # 论文使用0.05
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+
+  # 学习率调度（论文规格）
+  scheduler:
+    name: "cosine_with_warmup"
+    warmup_steps: 2000  # 论文使用2000步
+    min_lr: 1.0e-6
+
+  # 训练稳定性
+  max_grad_norm: 1.0
+  fp16: true  # 混合精度训练
+  gradient_checkpointing: true  # 节省内存
+
+  # 检查点配置
+  checkpointing:
+    save_steps: 500
+    save_total_limit: 5
+    save_best_model: true
+    metric_for_best_model: "eval_rouge_l"
+    greater_is_better: true
+
+  # 早期停止
+  early_stopping:
+    enabled: true
+    patience: 3
+    min_delta: 0.001
+
+  # 日志配置
+  logging:
+    steps: 10
+    level: "INFO"
+    save_losses: true
+    save_metrics: true
+
+# 评估配置
+evaluation:
+  # 评估指标（论文中使用）
+  metrics:
+    - name: "rouge_1"
+      description: "ROUGE-1评分"
+    - name: "rouge_2"
+      description: "ROUGE-2评分"
+    - name: "rouge_l"
+      description: "ROUGE-L评分"
+    - name: "bleu"
+      description: "BLEU评分"
+    - name: "bertscore"
+      description: "BERTScore语义相似度"
+    - name: "gene_function_accuracy"
+      description: "基因功能预测准确率"
+
+  # 评估数据集
+  eval_datasets:
+    - name: "test_set"
+      description: "测试集评估"
+    - name: "held_out_genes"
+      description: "保留基因集评估"
+
+  # 生成配置
+  generation:
+    max_new_tokens: 256
+    num_beams: 4
+    temperature: 0.7
+    do_sample: true
+    top_p: 0.9
+    repetition_penalty: 1.2
+    length_penalty: 1.0
+
+# 硬件配置
+hardware:
+  # GPU配置（论文要求）
+  gpu_memory: "70GB+"
+  mixed_precision: true
+  device_mapping: "auto"
+
+  # 内存优化
+  memory_optimization:
+    gradient_checkpointing: true
+    use_cache: false  # 训练时关闭缓存
+    deepspeed: false  # 根据需要启用
+
+  # 分布式训练
+  distributed:
+    enabled: false
+    backend: "nccl"
+    world_size: 1
+
+# 数据路径配置
+paths:
+  # 数据路径
+  data_root: "./data"
+  ncbi_data: "./data/ncbi_genes"
+  processed_data: "./data/processed"
+
+  # 模型路径
+  model_output_dir: "./checkpoints"
+  cache_dir: "./cache"
+  log_dir: "./logs"
+
+  # 评估路径
+  eval_output_dir: "./evaluation_results"
+  predictions_dir: "./predictions"
+
+# 实验配置
+experiment:
+  name: "genechat2_base"
+  description: "GeneChat2基础模型实验"
+  tags: ["gene_function_prediction", "multimodal", "dna_sequence"]
+
+  # 可复现性
+  seed: 42
+  deterministic: true
+
+  # 实验跟踪
+  tracking:
+    enabled: true
+    backend: "tensorboard"  # 或 "wandb"
+    project: "genechat2"
+    entity: null
+
+# 质量控制配置
+quality_control:
+  # 数据质量
+  data_quality:
+    min_sequence_length: 1000  # 最小1kb
+    max_sequence_length: 200000  # 最大200kb
+    remove_duplicates: true
+    validate_dna_alphabet: true
+
+  # 模型质量
+  model_validation:
+    check_output_format: true
+    validate_dna_encoding: true
+    check_adaptation_dimensions: true
+
+  # 训练监控
+  training_monitoring:
+    check_loss_convergence: true
+    monitor_gradient_norms: true
+    validate_batch_inputs: true
+
+# 安全和伦理配置
+safety:
+  # 内容安全
+  content_filtering:
+    enabled: true
+    filter_types: ["harmful_content", "misinformation"]
+
+  # 使用限制
+  usage_restrictions:
+    allow_medical_diagnosis: false
+    allow_genetic_counseling: false
+    require_disclaimer: true
+
+  # 数据隐私
+  privacy:
+    anonymize_patient_data: true
+    comply_with_gdpr: true
+    comply_with_hipaa: false  # NCBI数据是公开的
+
+# 性能目标（论文中的基线）
+targets:
+  # 文本生成质量目标
+  rouge_1_target: 0.35
+  rouge_2_target: 0.20
+  rouge_l_target: 0.30
+  bleu_target: 0.15
+
+  # 生物学准确性目标
+  function_prediction_accuracy: 0.75
+  species_identification_accuracy: 0.85
+  location_prediction_accuracy: 0.70
+
+  # 性能目标
+  inference_latency_ms: 2000  # 2秒内
+  memory_usage_gb: 70  # 70GB GPU内存
+  training_time_hours: 24  # 24小时内完成
+
+# 调试配置
+debug:
+  enabled: false
+  save_checkpoints: true
+  verbose_logging: true
+  save_intermediate_outputs: true
+  gradient_checks: false
+  tensor_shapes_check: true
+
+# 版本信息
+version:
+  genechat2_version: "2.0.0"
+  config_version: "2.0.0"
+  based_on_paper: "GeneChat: Multi-Modal Large Language Model Enables Gene Function Prediction"
+  paper_arxiv_id: "2406.00960"
+  creation_date: "2024-12-01"

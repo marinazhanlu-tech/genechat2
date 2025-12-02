@@ -1,0 +1,237 @@
+# GeneChat2 A800-80G 优化配置
+# 针对NVIDIA A800-80G NVLink优化的训练配置
+# 生成时间: 2025-12-02
+
+# 继承基础配置
+base_config: "genechat_config.yaml"
+
+# A800-80G 特定优化
+hardware:
+  gpu:
+    name: "NVIDIA A800-80G"
+    memory_gb: 80
+    memory_utilization: 0.90  # 使用90%内存（72GB）
+    nvlink: true
+    compute_capability: 8.0
+
+  # 内存优化策略
+  memory_optimization:
+    gradient_checkpointing: true
+    use_cache: false
+    torch_compile: false  # PyTorch 2.0+编译优化（可选）
+    flash_attention: false  # Flash Attention 2（如果可用）
+
+  # CUDA优化
+  cuda:
+    allow_tf32: true  # A800支持TF32
+    cudnn_benchmark: true
+    cudnn_deterministic: false
+    max_split_size_mb: 512
+
+# 训练优化（针对80GB显存）
+training:
+  # 可以使用更大的批大小
+  batch_size: 2  # A800可以支持更大批大小
+  gradient_accumulation_steps: 4  # 有效批大小 = 2 * 4 = 8
+
+  # 混合精度优化
+  fp16: true
+  fp16_opt_level: "O1"  # 自动混合精度
+  fp16_backend: "amp"
+
+  # 梯度相关
+  max_grad_norm: 1.0
+  gradient_checkpointing: true
+
+  # A800可以处理更长的序列
+  max_sequence_length: 160000  # 完整160kb序列
+
+  # 更频繁的日志（A800训练快）
+  logging_steps: 5
+  save_steps: 250
+  eval_steps: 500
+
+  # 优化器配置（A800可以用更大的学习率）
+  optimizer:
+    name: "adamw"
+    learning_rate: 1.5e-4  # 稍微提高
+    weight_decay: 0.05
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+    fused: true  # 使用fused AdamW（更快）
+
+  # 学习率调度
+  scheduler:
+    name: "cosine_with_warmup"
+    warmup_steps: 2000
+    warmup_ratio: 0.01
+    min_lr: 1.0e-6
+
+  # 数据加载优化
+  dataloader:
+    num_workers: 8  # 更多worker
+    pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+
+# 模型配置优化
+model:
+  # 基因编码器
+  gene_encoder:
+    # 可以批处理更多窗口
+    batch_size: 32  # A800可以处理更大批次
+
+  # LoRA配置（可以适当增大）
+  lora:
+    r: 8  # 保持论文配置
+    lora_alpha: 16
+    target_modules: ["q_proj", "v_proj"]
+    lora_dropout: 0.05
+
+# 评估优化
+evaluation:
+  # A800可以更快评估
+  batch_size: 4
+  max_eval_samples: null  # 评估全部样本
+
+  # 生成配置
+  generation:
+    max_new_tokens: 256
+    num_beams: 4
+    do_sample: false  # 评估时用beam search
+    temperature: 1.0
+    top_p: 1.0
+
+# 分布式训练配置（如果有多卡A800）
+distributed:
+  enabled: false  # 单卡训练
+  # 如果有多卡：
+  # enabled: true
+  # backend: "nccl"
+  # world_size: 8  # 8卡A800
+  # find_unused_parameters: false
+
+# 检查点策略（A800训练快，可以更频繁保存）
+checkpointing:
+  save_steps: 250  # 更频繁保存
+  save_total_limit: 10  # 保留更多检查点
+  save_best_model: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  load_best_model_at_end: true
+
+# 早停策略（更宽松，因为A800训练快）
+early_stopping:
+  enabled: true
+  patience: 5  # 更多patience
+  min_delta: 0.0001
+
+# 监控和日志
+monitoring:
+  tensorboard:
+    enabled: true
+    log_dir: "./logs/tensorboard"
+
+  wandb:
+    enabled: false  # 可选
+    project: "genechat2"
+    entity: null
+
+  # GPU监控
+  gpu_monitoring:
+    enabled: true
+    interval_seconds: 60
+    log_memory: true
+    log_utilization: true
+
+# 性能基准（A800预期）
+performance_targets:
+  # A800应该能达到的性能
+  steps_per_second: 2.5  # 预期每秒2-3步
+  gpu_utilization: 0.90  # 90%+ GPU利用率
+  memory_utilization: 0.85  # 85%+ 内存使用
+
+  # 训练时间估算
+  estimated_time_hours: 20  # A800预计20小时完成170k步
+
+  # 吞吐量
+  samples_per_second: 0.3  # 每秒处理样本数
+  tokens_per_second: 48000  # 每秒处理token数（160k序列）
+
+# 故障恢复
+fault_tolerance:
+  # 自动恢复
+  auto_resume: true
+  checkpoint_on_error: true
+
+  # 重试策略
+  max_retries: 3
+  retry_delay_seconds: 10
+
+# 实验跟踪
+experiment:
+  name: "genechat2_a800_production"
+  description: "GeneChat2 on NVIDIA A800-80G - Production Training"
+  tags:
+    - "a800-80g"
+    - "production"
+    - "full-training"
+    - "170k-steps"
+
+  notes: |
+    完整的170k步训练
+    硬件: NVIDIA A800-80G NVLink
+    优化: TF32, fused AdamW, gradient checkpointing
+    预期时间: ~20小时
+    预期性能: BLEU-1 ~0.19, METEOR ~0.27
+
+# 调试配置
+debug:
+  enabled: false
+  detect_anomaly: false  # 生产训练关闭
+  profile: false
+  save_intermediate_outputs: false
+
+# 验证配置
+validation:
+  # 定期验证
+  validate_every_n_steps: 1000
+  validation_batch_size: 4
+
+  # 快速验证（前期更频繁）
+  quick_validation_steps: [100, 500, 1000, 2000, 5000]
+  quick_validation_samples: 50
+
+# 数据配置（与基础配置一致）
+data:
+  source:
+    total_genes: 50248
+
+  splits:
+    train: 0.95  # 修正：95%训练集
+    test: 0.05   # 5%测试集
+    validation: 0  # 无验证集
+
+  # 数据增强（可选）
+  augmentation:
+    enabled: false
+    random_crop: false
+    reverse_complement: false
+
+# 输出配置
+output:
+  base_dir: "./checkpoints_a800"
+  save_predictions: true
+  save_attention_weights: false  # 节省空间
+  save_hidden_states: false
+
+  # 生成示例（每1000步）
+  generate_samples_every_n_steps: 1000
+  num_sample_genes: 5
+
+# 资源限制
+resources:
+  max_memory_gb: 72  # 限制在72GB（90%的80GB）
+  cpu_threads: 16
+  max_open_files: 4096
