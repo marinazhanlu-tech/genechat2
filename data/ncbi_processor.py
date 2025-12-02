@@ -56,6 +56,7 @@ class GeneTriplet:
     target_description: str
     gene_metadata: Dict
 
+@dataclass
 class NCBIConfig:
     """NCBI数据处理器配置"""
     email: str = "your_email@example.com"  # NCBI API需要
